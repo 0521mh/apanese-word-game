@@ -2,3 +2,4 @@ streamlit
 requests
 pandas
 qrcode[pil]
+gTTS
