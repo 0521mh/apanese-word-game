@@ -5,6 +5,7 @@ import json
 import requests
 import pandas as pd
 import qrcode
+from gtts import gTTS
 from io import BytesIO
 from datetime import datetime, timezone, timedelta
 
@@ -12,7 +13,7 @@ from datetime import datetime, timezone, timedelta
 # ★ 1. 새로 만든 구글 웹 앱 URL을 여기에 붙여넣으세요!
 GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbx-aX4jYUgWXZxKhPAbZwEzwKd_F9UmQzii2S8WgETM3s1_HhzrKW5HKxMOoxY6VwuC/exec"
 # ★ 2. 교사 설정 접속 비밀번호
-TEACHER_PASSWORD = "0423"
+TEACHER_PASSWORD = "1234"
 # ★ 3. 새 스트림릿 배포 후 발급받은 주소를 넣으면 QR코드가 자동 생성됩니다!
 APP_PUBLIC_URL = "https://여기에-새-배포주소를-넣으세요.streamlit.app"
 # ==========================================
@@ -87,12 +88,27 @@ VOCAB_DATA = {
 UNITS = ["1과", "2과", "3과", "4과", "5과", "6과", "7과", "8과", "전체(1~8과)"]
 
 def get_unit_words(unit_name):
+    if unit_name == "1~2과":
+        return VOCAB_DATA["1과"] + VOCAB_DATA["2과"]
     if unit_name == "전체(1~8과)":
         all_words = []
         for u in ["1과", "2과", "3과", "4과", "5과", "6과", "7과", "8과"]:
             all_words.extend(VOCAB_DATA[u])
         return all_words
     return VOCAB_DATA.get(unit_name, VOCAB_DATA["1과"])
+
+@st.cache_data(show_spinner=False)
+def get_japanese_audio(jp_text):
+    tts = gTTS(text=jp_text, lang="ja")
+    buf = BytesIO()
+    tts.write_to_fp(buf)
+    return buf.getvalue()
+
+def make_listening_question(unit_name, exclude_jp=None):
+    words = get_unit_words(unit_name)
+    candidates = [w for w in words if w[0] != exclude_jp] if exclude_jp and len(words) > 1 else words
+    jp, kr = random.choice(candidates)
+    return {"jp": jp, "kr": kr}
 
 def make_quiz_question(unit_name, exclude_jp=None):
     words = get_unit_words(unit_name)
@@ -149,7 +165,6 @@ def normalize_kst_timestamp(val):
     if not s:
         return ""
     try:
-        # 구글 시트에서 ISO 형태(2026-11-23T05:10:00.000Z)로 넘어올 경우 한국시간(+9시간)으로 변환
         if "T" in s and s.endswith("Z"):
             dt_utc = datetime.fromisoformat(s.replace("Z", "+00:00"))
             dt_kst = dt_utc.astimezone(timezone(timedelta(hours=9)))
@@ -209,6 +224,11 @@ def start_attempt(cfg):
 
     if cfg["game_type"] == "타일 매칭 (6쌍)":
         init_tile_board_from_cfg(cfg, 0)
+    elif cfg["game_type"] == "원어민 음성 듣고 쓰기":
+        if cfg["mode"] == "동일 문제" and len(cfg["fixed_questions"]) > 0:
+            st.session_state.current_listen = cfg["fixed_questions"][0]
+        else:
+            st.session_state.current_listen = make_listening_question(cfg["unit_name"])
     else:
         if cfg["mode"] == "동일 문제" and len(cfg["fixed_questions"]) > 0:
             st.session_state.current_quiz = cfg["fixed_questions"][0]
@@ -300,17 +320,20 @@ with tab_teacher:
             else:
                 cutline_score = st.number_input("통과 커트라인(점)", min_value=1, max_value=100, value=12, step=1)
 
-        def deploy_unit(u_name):
+        def deploy_unit(u_name, override_game_type=None):
+            g_type = override_game_type if override_game_type else selected_game
             fixed_qs = []
             if selected_mode == "동일 문제":
-                if selected_game == "타일 매칭 (6쌍)":
+                if g_type == "타일 매칭 (6쌍)":
                     fixed_qs = [make_tile_board(u_name) for _ in range(15)]
+                elif g_type == "원어민 음성 듣고 쓰기":
+                    fixed_qs = [make_listening_question(u_name) for _ in range(50)]
                 else:
                     fixed_qs = [make_quiz_question(u_name) for _ in range(50)]
 
             payload = {
                 "action": "set_config",
-                "game_type": selected_game,
+                "game_type": g_type,
                 "unit_name": u_name,
                 "time_limit": time_sec,
                 "mode": selected_mode,
@@ -323,7 +346,7 @@ with tab_teacher:
             st.session_state.teacher_cfg = payload
             t_str = "무제한" if selected_min == 0 else f"{selected_min}분"
             c_str = "커트라인 없음" if cutline_score == 0 else f"커트라인 {cutline_score}점"
-            st.success(f"✅ 배포 완료! [{u_name} / {selected_game} / {t_str} / {selected_mode} / {c_str}]")
+            st.success(f"✅ 배포 완료! [{u_name} / {g_type} / {t_str} / {selected_mode} / {c_str}]")
 
         st.write("**5️⃣ 출제할 단원 클릭 (클릭 즉시 오픈 상태로 배포됨):**")
         cols_u1 = st.columns(5)
@@ -332,12 +355,15 @@ with tab_teacher:
             if cols_u1[idx].button(f"{u_name} ({len(VOCAB_DATA[u_name])}단어)", key=f"u_btn_{idx}", use_container_width=True):
                 deploy_unit(u_name)
 
-        cols_u2 = st.columns(4)
+        cols_u2 = st.columns(5)
         for idx in range(5, 9):
             u_name = UNITS[idx]
             label = "전체(1~8과)" if u_name == "전체(1~8과)" else f"{u_name} ({len(VOCAB_DATA[u_name])}단어)"
             if cols_u2[idx - 5].button(label, key=f"u_btn_{idx}", use_container_width=True):
                 deploy_unit(u_name)
+
+        if cols_u2[4].button("🔊 원어민 발음 듣고 쓰기 (1~2과)", key="u_btn_listen_1_2", type="primary", use_container_width=True):
+            deploy_unit("1~2과", override_game_type="원어민 음성 듣고 쓰기")
 
         st.divider()
 
@@ -419,6 +445,8 @@ with tab_student:
                 st.write(f"- **제한 시간:** {time_display}")
                 st.write(f"- **출제 방식:** {cfg['mode']}")
                 st.write(f"- **통과 기준(커트라인):** **{cutline_display}**")
+                if cfg["game_type"] == "원어민 음성 듣고 쓰기":
+                    st.caption("🎧 팁: 소리를 잘 듣고 스마트폰의 일본어 키보드로 정확히 입력해 주세요!")
                 if st.button("🔄 최신 출제 설정 새로고침"):
                     st.session_state.config = fetch_exam_config()
                     st.rerun()
@@ -503,8 +531,8 @@ with tab_student:
 
             if st.session_state.wrong_list:
                 st.subheader("📝 방금 틀린 단어 복습")
-                for w_jp, w_kr, u_kr in st.session_state.wrong_list:
-                    st.write(f"- **{w_jp}** → 정답: **{w_kr}** (내 선택: {u_kr})")
+                for w_jp, w_kr, u_input in st.session_state.wrong_list:
+                    st.write(f"- **{w_jp}** ({w_kr}) → 내 입력: `{u_input}`")
 
         # ------------------------------------------
         # 게임 진행 화면
@@ -572,7 +600,44 @@ with tab_student:
                                         st.session_state.feedback = ("error", f"❌ 짝이 맞지 않습니다! ({first_card['text']} ≠ {card['text']})")
                                         st.rerun()
 
-            # [게임 모드 B] 4지선다 스피드 퀴즈
+            # [게임 모드 B] 원어민 음성 듣고 쓰기 (1~2과)
+            elif cfg["game_type"] == "원어민 음성 듣고 쓰기":
+                if st.session_state.combo >= 3:
+                    st.info(f"🔥 **{st.session_state.combo}연속 정답 행진 중!**")
+
+                listen_q = st.session_state.current_listen
+                with st.container(border=True):
+                    st.markdown("#### 🎧 원어민 발음을 듣고 일본어로 입력하세요")
+                    audio_bytes = get_japanese_audio(listen_q["jp"])
+                    st.audio(audio_bytes, format="audio/mp3", autoplay=True)
+                    st.caption("※ 자동 재생이 안 될 경우 재생 버튼(▶)을 눌러 여러 번 다시 들을 수 있습니다.")
+
+                with st.form(key="listening_form", clear_on_submit=True):
+                    jp_input = st.text_input("일본어(히라가나) 입력:", placeholder="예: すし, ありがとう")
+                    submitted = st.form_submit_button("✅ 정답 제출", type="primary", use_container_width=True)
+
+                if submitted:
+                    cleaned_jp = jp_input.replace(" ", "").replace(" ", "").strip()
+                    st.session_state.total += 1
+                    if cleaned_jp == listen_q["jp"]:
+                        st.session_state.score += 1
+                        st.session_state.combo += 1
+                        st.session_state.max_combo = max(st.session_state.max_combo, st.session_state.combo)
+                        st.session_state.feedback = ("success", f"⭕ 정답! ({listen_q['jp']} : {listen_q['kr']})")
+                    else:
+                        st.session_state.combo = 0
+                        st.session_state.feedback = ("error", f"❌ 오답! 정답은 '{listen_q['jp']}' ({listen_q['kr']}) 입니다. (내 입력: {cleaned_jp})")
+                        st.session_state.wrong_list.append((listen_q["jp"], listen_q["kr"], cleaned_jp))
+
+                    st.session_state.q_index += 1
+                    if cfg["mode"] == "동일 문제" and len(cfg["fixed_questions"]) > 0:
+                        idx = st.session_state.q_index % len(cfg["fixed_questions"])
+                        st.session_state.current_listen = cfg["fixed_questions"][idx]
+                    else:
+                        st.session_state.current_listen = make_listening_question(cfg["unit_name"], exclude_jp=listen_q["jp"])
+                    st.rerun()
+
+            # [게임 모드 C] 4지선다 스피드 퀴즈
             else:
                 if st.session_state.combo >= 3:
                     st.info(f"🔥 **{st.session_state.combo}연속 정답 행진 중!**")
