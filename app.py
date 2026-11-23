@@ -14,7 +14,7 @@ GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbx-aX4jYUgWXZxKhPAb
 # ★ 2. 교사 설정 접속 비밀번호
 TEACHER_PASSWORD = "0423"
 # ★ 3. 새 스트림릿 배포 후 발급받은 주소를 넣으면 QR코드가 자동 생성됩니다!
-APP_PUBLIC_URL = "https://apanese-word-game-atsn2kvdd3numytkmdmvgd.streamlit.app/"
+APP_PUBLIC_URL = "https://여기에-새-배포주소를-넣으세요.streamlit.app"
 # ==========================================
 
 st.set_page_config(page_title="생활일본어 1~8과 단어 게임", page_icon="🇯🇵", layout="centered")
@@ -99,7 +99,6 @@ def make_quiz_question(unit_name, exclude_jp=None):
     candidates = [w for w in words if w[0] != exclude_jp] if exclude_jp and len(words) > 1 else words
     jp, kr = random.choice(candidates)
     
-    # 보기 4개 생성 (중복 뜻 방지)
     wrong_pool = list({w[1] for w in words if w[1] != kr})
     if len(wrong_pool) < 3:
         all_kr = list({w[1] for u in VOCAB_DATA.values() for w in u if w[1] != kr})
@@ -111,7 +110,6 @@ def make_quiz_question(unit_name, exclude_jp=None):
 
 def make_tile_board(unit_name):
     words = get_unit_words(unit_name)
-    # 중복된 한국어 뜻이 한 판에 동시에 나오지 않도록 6쌍 추출
     unique_kr_words = []
     seen_kr = set()
     shuffled = words[:]
@@ -132,7 +130,11 @@ def make_tile_board(unit_name):
 
 def fetch_exam_config():
     try:
-        res = requests.get(GOOGLE_SCRIPT_URL, params={"action": "get_config"}, timeout=5)
+        res = requests.get(
+            GOOGLE_SCRIPT_URL,
+            params={"action": "get_config", "_t": int(time.time() * 1000)},
+            timeout=5
+        )
         data = res.json()
         data["fixed_questions"] = json.loads(data.get("fixed_questions", "[]"))
         return data
@@ -142,12 +144,34 @@ def fetch_exam_config():
             "mode": "무작위", "fixed_questions": [], "cutline": 12, "is_open": True
         }
 
+def normalize_kst_timestamp(val):
+    s = str(val).strip()
+    if not s:
+        return ""
+    try:
+        # 구글 시트에서 ISO 형태(2026-11-23T05:10:00.000Z)로 넘어올 경우 한국시간(+9시간)으로 변환
+        if "T" in s and s.endswith("Z"):
+            dt_utc = datetime.fromisoformat(s.replace("Z", "+00:00"))
+            dt_kst = dt_utc.astimezone(timezone(timedelta(hours=9)))
+            return dt_kst.strftime("%Y-%m-%d %H:%M:%S")
+        dt = pd.to_datetime(s)
+        return dt.strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return s
+
 def fetch_results_df():
     try:
-        res = requests.get(GOOGLE_SCRIPT_URL, params={"action": "get_results"}, timeout=5)
+        res = requests.get(
+            GOOGLE_SCRIPT_URL,
+            params={"action": "get_results", "_t": int(time.time() * 1000)},
+            timeout=5
+        )
         rows = res.json().get("results", [])
         if len(rows) > 1:
-            return pd.DataFrame(rows[1:], columns=rows[0])
+            df = pd.DataFrame(rows[1:], columns=rows[0])
+            time_col = df.columns[0]
+            df[time_col] = df[time_col].apply(normalize_kst_timestamp)
+            return df
         return pd.DataFrame()
     except Exception:
         return pd.DataFrame()
@@ -323,267 +347,3 @@ with tab_teacher:
                 st.image(generate_qr_image(APP_PUBLIC_URL), width=200)
             with col_qr2:
                 st.markdown("#### 스마트폰 카메라로 QR코드를 스캔하세요!")
-                st.code(APP_PUBLIC_URL)
-                st.caption("※ 코드 상단의 APP_PUBLIC_URL 변수에 실제 배포된 주소를 입력하면 해당 주소의 QR코드가 생성됩니다.")
-
-        st.markdown("#### 📊 실시간 통과(제출) 현황 및 화면 정리")
-        col_ref, col_new = st.columns(2)
-        with col_ref:
-            if st.button("🔄 최신 제출 명단 새로고침", use_container_width=True):
-                st.rerun()
-        with col_new:
-            if st.button("✨ 새 반 시작 (화면만 비우기)", type="primary", use_container_width=True):
-                kst = timezone(timedelta(hours=9))
-                st.session_state.view_after = datetime.now(kst).strftime("%Y-%m-%d %H:%M:%S")
-                st.rerun()
-
-        df_res = fetch_results_df()
-        if not df_res.empty and "view_after" in st.session_state:
-            time_col = df_res.columns[0]
-            df_res = df_res[df_res[time_col] >= st.session_state.view_after]
-
-        if not df_res.empty:
-            st.metric("현재 화면 통과 인원", f"{len(df_res)}명")
-            st.dataframe(df_res.iloc[::-1], use_container_width=True, hide_index=True)
-
-            csv_data = df_res.to_csv(index=False).encode("utf-8-sig")
-            kst = timezone(timedelta(hours=9))
-            file_time = datetime.now(kst).strftime("%Y%m%d_%H%M")
-            st.download_button(
-                label="📥 현재 화면 결과 엑셀(CSV)로 다운로드",
-                data=csv_data,
-                file_name=f"단어게임결과_{file_time}.csv",
-                mime="text/csv",
-                use_container_width=True
-            )
-        else:
-            st.info("현재 표시할 통과 기록이 없습니다. (기존 누적 데이터는 구글 시트에 안전하게 보관되어 있습니다)")
-
-    elif pw:
-        st.error("비밀번호가 올바르지 않습니다.")
-
-# ==========================================
-# [탭 1] 학생 게임 응시 화면
-# ==========================================
-with tab_student:
-    st.title("🇯🇵 생활일본어 단어 게임")
-
-    if not st.session_state.exam_started:
-        if "config" not in st.session_state:
-            st.session_state.config = fetch_exam_config()
-        
-        cfg = st.session_state.config
-        is_open = bool(cfg.get("is_open", True))
-
-        if not is_open:
-            st.warning("🔒 현재 선생님이 게임을 마감하여 진행 중인 활동이 없습니다.")
-            if st.button("🔄 오픈 여부 다시 확인하기"):
-                st.session_state.config = fetch_exam_config()
-                st.rerun()
-        else:
-            t_limit = int(cfg["time_limit"])
-            time_display = "무제한 (연습용)" if t_limit == 0 else f"{t_limit // 60}분"
-            cutline = int(cfg.get("cutline", 0))
-            cutline_display = "없음 (자유 연습)" if cutline == 0 else f"{cutline}점 이상 (미달 시 재도전)"
-
-            with st.container(border=True):
-                st.markdown("### 📌 현재 배포된 단어 게임 안내")
-                st.write(f"- **출제 단원:** {cfg['unit_name']}")
-                st.write(f"- **게임 방식:** **{cfg['game_type']}**")
-                st.write(f"- **제한 시간:** {time_display}")
-                st.write(f"- **출제 방식:** {cfg['mode']}")
-                st.write(f"- **통과 기준(커트라인):** **{cutline_display}**")
-                if st.button("🔄 최신 출제 설정 새로고침"):
-                    st.session_state.config = fetch_exam_config()
-                    st.rerun()
-
-            st.subheader("응시자 정보 입력")
-            c1, c2 = st.columns(2)
-            s_id = c1.text_input("학번 (예: 10215)")
-            s_name = c2.text_input("이름 (예: 홍길동)")
-
-            if st.button("🚀 게임 시작하기", type="primary", use_container_width=True):
-                if not s_id.strip() or not s_name.strip():
-                    st.warning("학번과 이름을 모두 입력해 주세요!")
-                else:
-                    st.session_state.student_id = s_id.strip()
-                    st.session_state.student_name = s_name.strip()
-                    st.session_state.attempts = 1
-                    start_attempt(cfg)
-                    st.rerun()
-
-    else:
-        cfg = st.session_state.config
-        time_limit = int(cfg["time_limit"])
-        cutline = int(cfg.get("cutline", 0))
-
-        if time_limit > 0 and (time.time() - st.session_state.start_time) >= time_limit and not st.session_state.is_finished:
-            st.session_state.is_finished = True
-
-        # ------------------------------------------
-        # 게임 종료 및 결과 처리 화면
-        # ------------------------------------------
-        if st.session_state.is_finished:
-            cutline_text = "없음(연습)" if cutline == 0 else f"{cutline}점"
-            time_end_text = "무제한" if time_limit == 0 else "00:00"
-            m1, m2, m3 = st.columns(3)
-            m1.metric("응시자", f"{st.session_state.student_name} ({st.session_state.attempts}차 도전)")
-            m2.metric("최종 점수 / 목표", f"{st.session_state.score} / {cutline_text}")
-            m3.metric("남은 시간", time_end_text)
-            st.divider()
-
-            is_passed = st.session_state.score >= cutline
-
-            if is_passed:
-                if not st.session_state.result_sent:
-                    kst = timezone(timedelta(hours=9))
-                    now_str = datetime.now(kst).strftime("%Y-%m-%d %H:%M:%S")
-                    acc = round((st.session_state.score / st.session_state.total * 100), 1) if st.session_state.total > 0 else 0
-                    t_record = "무제한" if time_limit == 0 else f"{time_limit // 60}분"
-                    
-                    payload = {
-                        "action": "submit_result",
-                        "timestamp": now_str,
-                        "student_id": st.session_state.student_id,
-                        "student_name": st.session_state.student_name,
-                        "game_type": cfg["game_type"],
-                        "unit_name": cfg["unit_name"],
-                        "mode": cfg["mode"],
-                        "time_text": t_record,
-                        "score": st.session_state.score,
-                        "total": st.session_state.total,
-                        "accuracy": f"{acc}%",
-                        "attempts": f"{st.session_state.attempts}회"
-                    }
-                    with st.spinner("통과! 선생님 구글 시트로 결과를 전송하는 중입니다..."):
-                        requests.post(GOOGLE_SCRIPT_URL, json=payload)
-                    st.session_state.result_sent = True
-
-                st.balloons()
-                st.success(f"🎉 통과했습니다! **{st.session_state.student_name}** 학생, 총 **{st.session_state.score}점**으로 선생님께 기록이 전송되었습니다! (총 {st.session_state.attempts}차 시도)")
-
-                if st.button("🔄 한 번 더 연습하기", use_container_width=True):
-                    st.session_state.attempts += 1
-                    start_attempt(cfg)
-                    st.rerun()
-
-            else:
-                st.error(f"💦 아쉽습니다! 현재 **{st.session_state.score}점**으로 통과 기준(**{cutline}점**)에 도달하지 못했습니다. 결과가 전송되지 않았으니 다시 도전하세요!")
-
-                if st.button("🔄 다시 도전하기", type="primary", use_container_width=True):
-                    st.session_state.attempts += 1
-                    start_attempt(cfg)
-                    st.rerun()
-
-            if st.session_state.wrong_list:
-                st.subheader("📝 방금 틀린 단어 복습")
-                for w_jp, w_kr, u_kr in st.session_state.wrong_list:
-                    st.write(f"- **{w_jp}** → 정답: **{w_kr}** (내 선택: {u_kr})")
-
-        # ------------------------------------------
-        # 게임 진행 화면
-        # ------------------------------------------
-        else:
-            live_timer_header(time_limit, cutline)
-
-            if cutline > 0:
-                prog_val = min(st.session_state.score / cutline, 1.0)
-                st.progress(prog_val, text=f"목표 달성률: {int(prog_val * 100)}% (남은 점수: {max(0, cutline - st.session_state.score)}점)")
-            else:
-                st.info("♾️ **자유 연습 모드**입니다. 원하는 만큼 연습한 뒤 아래 **[⏹️ 연습 종료 및 제출]** 버튼을 누르세요.")
-
-            if st.session_state.feedback:
-                f_type, f_msg = st.session_state.feedback
-                if f_type == "success":
-                    st.success(f_msg)
-                else:
-                    st.error(f_msg)
-
-            # [게임 모드 A] 타일 매칭 (6쌍 짝맞추기)
-            if cfg["game_type"] == "타일 매칭 (6쌍)":
-                st.caption("일본어 카드와 알맞은 한글 뜻 카드를 차례로 클릭해 짝을 맞추세요! (1쌍 성공 = +1점)")
-                cards = st.session_state.tile_cards
-                matched = st.session_state.matched_pairs
-                sel_idx = st.session_state.selected_card_idx
-
-                # 3열 x 4행 = 12장 배치
-                for row in range(4):
-                    cols = st.columns(3)
-                    for col in range(3):
-                        idx = row * 3 + col
-                        card = cards[idx]
-                        is_matched = card["pair_id"] in matched
-                        is_selected = (sel_idx == idx)
-
-                        if is_matched:
-                            cols[col].button(f"✅ {card['text']}", key=f"tile_{idx}_{st.session_state.q_index}", disabled=True, use_container_width=True)
-                        else:
-                            btn_type = "primary" if is_selected else "secondary"
-                            if cols[col].button(card["text"], key=f"tile_{idx}_{st.session_state.q_index}", type=btn_type, use_container_width=True):
-                                if sel_idx is None:
-                                    st.session_state.selected_card_idx = idx
-                                    st.rerun()
-                                elif sel_idx == idx:
-                                    st.session_state.selected_card_idx = None
-                                    st.rerun()
-                                else:
-                                    first_card = cards[sel_idx]
-                                    st.session_state.total += 1
-                                    if first_card["pair_id"] == card["pair_id"] and first_card["type"] != card["type"]:
-                                        st.session_state.score += 1
-                                        st.session_state.matched_pairs.add(card["pair_id"])
-                                        st.session_state.selected_card_idx = None
-                                        jp_txt = first_card["text"] if first_card["type"] == "JP" else card["text"]
-                                        kr_txt = card["text"] if first_card["type"] == "JP" else first_card["text"]
-                                        st.session_state.feedback = ("success", f"⭕ 짝맞추기 성공! ({jp_txt} = {kr_txt})")
-
-                                        # 6쌍 모두 맞추면 다음 판으로 자동 전환
-                                        if len(st.session_state.matched_pairs) == 6:
-                                            st.session_state.q_index += 1
-                                            init_tile_board_from_cfg(cfg, st.session_state.q_index)
-                                            st.session_state.feedback = ("success", "🎉 6쌍 모두 클리어! 새로운 카드 12장이 열렸습니다!")
-                                        st.rerun()
-                                    else:
-                                        st.session_state.selected_card_idx = None
-                                        st.session_state.feedback = ("error", f"❌ 짝이 맞지 않습니다! ({first_card['text']} ≠ {card['text']})")
-                                        st.rerun()
-
-            # [게임 모드 B] 4지선다 스피드 퀴즈
-            else:
-                if st.session_state.combo >= 3:
-                    st.info(f"🔥 **{st.session_state.combo}연속 정답 행진 중!**")
-
-                quiz = st.session_state.current_quiz
-                with st.container(border=True):
-                    st.markdown(
-                        f"<div style='text-align: center; font-size: 64px; font-weight: bold; padding: 20px;'>{quiz['jp']}</div>",
-                        unsafe_allow_html=True
-                    )
-
-                st.write("**알맞은 한글 뜻을 선택하세요:**")
-                opt_cols = st.columns(2)
-                for i, opt in enumerate(quiz["options"]):
-                    if opt_cols[i % 2].button(f"{i+1}. {opt}", key=f"opt_{i}_{st.session_state.q_index}", use_container_width=True):
-                        st.session_state.total += 1
-                        if opt == quiz["kr"]:
-                            st.session_state.score += 1
-                            st.session_state.combo += 1
-                            st.session_state.max_combo = max(st.session_state.max_combo, st.session_state.combo)
-                            st.session_state.feedback = ("success", f"⭕ 정답! ({quiz['jp']} = {opt})")
-                        else:
-                            st.session_state.combo = 0
-                            st.session_state.feedback = ("error", f"❌ 오답! '{quiz['jp']}'의 뜻은 '{quiz['kr']}'입니다. (내 선택: {opt})")
-                            st.session_state.wrong_list.append((quiz["jp"], quiz["kr"], opt))
-
-                        st.session_state.q_index += 1
-                        if cfg["mode"] == "동일 문제" and len(cfg["fixed_questions"]) > 0:
-                            idx = st.session_state.q_index % len(cfg["fixed_questions"])
-                            st.session_state.current_quiz = cfg["fixed_questions"][idx]
-                        else:
-                            st.session_state.current_quiz = make_quiz_question(cfg["unit_name"], exclude_jp=quiz["jp"])
-                        st.rerun()
-
-            st.divider()
-            if st.button("⏹️ 지금 종료하고 결과 확인하기", use_container_width=True):
-                st.session_state.is_finished = True
-                st.rerun()
