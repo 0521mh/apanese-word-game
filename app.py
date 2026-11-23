@@ -14,7 +14,7 @@ GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbx-aX4jYUgWXZxKhPAb
 # ★ 2. 교사 설정 접속 비밀번호
 TEACHER_PASSWORD = "1234"
 # ★ 3. 새 스트림릿 배포 후 발급받은 주소를 넣으면 QR코드가 자동 생성됩니다!
-APP_PUBLIC_URL = "https://여기에-새-배포주소를-넣으세요.streamlit.app"
+APP_PUBLIC_URL = "https://apanese-word-game-atsn2kvdd3numytkmdmvgd.streamlit.app/"
 # ==========================================
 
 st.set_page_config(page_title="생활일본어 1~8과 단어 게임", page_icon="🇯🇵", layout="centered")
