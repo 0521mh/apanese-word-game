@@ -12,7 +12,7 @@ from datetime import datetime, timezone, timedelta
 # ★ 1. 새로 만든 구글 웹 앱 URL을 여기에 붙여넣으세요!
 GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbx-aX4jYUgWXZxKhPAbZwEzwKd_F9UmQzii2S8WgETM3s1_HhzrKW5HKxMOoxY6VwuC/exec"
 # ★ 2. 교사 설정 접속 비밀번호
-TEACHER_PASSWORD = "1234"
+TEACHER_PASSWORD = "0423"
 # ★ 3. 새 스트림릿 배포 후 발급받은 주소를 넣으면 QR코드가 자동 생성됩니다!
 APP_PUBLIC_URL = "https://apanese-word-game-atsn2kvdd3numytkmdmvgd.streamlit.app/"
 # ==========================================
